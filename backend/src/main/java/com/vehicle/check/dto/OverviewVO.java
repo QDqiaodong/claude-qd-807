@@ -15,6 +15,7 @@ public class OverviewVO {
     private Long stationCount;
     private Long vehicleCount;
     private Long checkingCount;
+    private Long affectedCount;
     private Long reportCount;
     private Long failReportCount;
     private Long overdueDeviceCount;

@@ -20,6 +20,7 @@ import com.vehicle.check.domain.Report;
 import com.vehicle.check.domain.Station;
 import com.vehicle.check.domain.Task;
 import com.vehicle.check.domain.TaskStationRecord;
+import com.vehicle.check.domain.TransferRecord;
 import com.vehicle.check.domain.Vehicle;
 import com.vehicle.check.dto.BadgeVO;
 import com.vehicle.check.dto.IssueReportRequest;
@@ -27,6 +28,7 @@ import com.vehicle.check.dto.LineReportStatDTO;
 import com.vehicle.check.dto.ReportVO;
 import com.vehicle.check.dto.RetestRequest;
 import com.vehicle.check.dto.TaskVO;
+import com.vehicle.check.dto.TransferRecordVO;
 import com.vehicle.check.repository.DeviceRepository;
 import com.vehicle.check.repository.DriverRepository;
 import com.vehicle.check.repository.LineRepository;
@@ -34,6 +36,7 @@ import com.vehicle.check.repository.ReportRepository;
 import com.vehicle.check.repository.StationRepository;
 import com.vehicle.check.repository.TaskRepository;
 import com.vehicle.check.repository.TaskStationRecordRepository;
+import com.vehicle.check.repository.TransferRecordRepository;
 import com.vehicle.check.repository.VehicleRepository;
 
 /**
@@ -48,6 +51,7 @@ public class ReportService {
     private final ReportRepository reportRepository;
     private final TaskRepository taskRepository;
     private final TaskStationRecordRepository recordRepository;
+    private final TransferRecordRepository transferRepository;
     private final VehicleRepository vehicleRepository;
     private final LineRepository lineRepository;
     private final StationRepository stationRepository;
@@ -55,12 +59,14 @@ public class ReportService {
     private final DriverRepository driverRepository;
 
     public ReportService(ReportRepository reportRepository, TaskRepository taskRepository,
-                         TaskStationRecordRepository recordRepository, VehicleRepository vehicleRepository,
+                         TaskStationRecordRepository recordRepository, TransferRecordRepository transferRepository,
+                         VehicleRepository vehicleRepository,
                          LineRepository lineRepository, StationRepository stationRepository,
                          DeviceRepository deviceRepository, DriverRepository driverRepository) {
         this.reportRepository = reportRepository;
         this.taskRepository = taskRepository;
         this.recordRepository = recordRepository;
+        this.transferRepository = transferRepository;
         this.vehicleRepository = vehicleRepository;
         this.lineRepository = lineRepository;
         this.stationRepository = stationRepository;
@@ -182,8 +188,11 @@ public class ReportService {
         task.setCheckDate(checkDate);
         task.setRetestTimes(origin.getRetestTimes() + 1);
         task.setCreateTime(LocalDateTime.now());
-        first.setStatus("OCCUPIED");
-        stationRepository.save(first);
+        // 起点工位故障时不覆盖其状态：复检车辆建档即进入「待跨线恢复」
+        if (!"FAULT".equals(first.getStatus())) {
+            first.setStatus("OCCUPIED");
+            stationRepository.save(first);
+        }
 
         report.setRetestOf(report.getRetestOf() == null || report.getRetestOf().isBlank()
                 ? report.getReportNo() : report.getRetestOf());
@@ -280,7 +289,41 @@ public class ReportService {
             badges.add(badge);
         }
         vo.setBadges(badges);
+        vo.setTransfers(transferViews(report.getTaskId()));
         return vo;
+    }
+
+    /** 报告关联任务的跨线轨迹（同一份连续检测链上的换线凭据） */
+    private List<TransferRecordVO> transferViews(Long taskId) {
+        List<TransferRecord> records = transferRepository.findByTaskIdOrderByIdDesc(taskId);
+        if (records.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<Long, Station> stationMap = stationRepository.findAllById(records.stream()
+                        .flatMap(r -> java.util.stream.Stream.of(r.getFromStationId(), r.getToStationId()))
+                        .collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(Station::getId, s -> s, (a, b) -> a));
+        List<TransferRecordVO> result = new ArrayList<>();
+        for (TransferRecord record : records) {
+            TransferRecordVO vo = new TransferRecordVO();
+            vo.setId(record.getId());
+            vo.setTaskId(record.getTaskId());
+            vo.setTaskNo(record.getTaskNo());
+            vo.setPlateNo(record.getPlateNo());
+            vo.setFromLineNo(record.getFromLineNo());
+            vo.setToLineNo(record.getToLineNo());
+            Station from = stationMap.get(record.getFromStationId());
+            Station to = stationMap.get(record.getToStationId());
+            vo.setFromStationName(from == null ? "" : from.getStationName());
+            vo.setToStationName(to == null ? "" : to.getStationName());
+            vo.setSeqNo(record.getSeqNo());
+            vo.setReason(record.getReason());
+            vo.setOperatorName(record.getOperatorName());
+            vo.setCreateTime(record.getCreateTime());
+            result.add(vo);
+        }
+        return result;
     }
 
     private TaskVO taskFlowView(Task task) {

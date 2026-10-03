@@ -61,6 +61,20 @@
         </div>
         <el-empty v-else description="请在左侧选择一辆在检车辆" :image-size="60" />
 
+        <el-alert
+          v-if="current && current.transfers && current.transfers.length"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-top: 12px;"
+        >
+          <div v-for="tr in current.transfers" :key="tr.id" style="font-size: 12px;">
+            跨线恢复：{{ tr.fromLineNo }} · {{ tr.fromStationName }} → {{ tr.toLineNo }} · {{ tr.toStationName }}
+            ｜ 值班员 {{ tr.operatorName }} ｜ {{ tr.reason }}
+            ｜ {{ tr.createTime ? String(tr.createTime).replace('T', ' ') : '' }}
+          </div>
+        </el-alert>
+
         <el-timeline v-if="current" style="margin-top: 14px; padding-left: 4px;">
           <el-timeline-item
             v-for="r in current.records"

@@ -35,6 +35,7 @@
           <div class="vc-a4-row"><span>签发人</span><b>{{ report?.signer || '-' }}</b></div>
           <div class="vc-a4-row"><span>签发日期</span><b>{{ report?.signDate || '-' }}</b></div>
           <div class="vc-a4-row"><span>复检关联</span><b>{{ report?.retestOf || '无' }}</b></div>
+          <div class="vc-a4-row"><span>跨线轨迹</span><b>{{ transferText }}</b></div>
         </div>
 
         <div class="vc-a4-snap">
@@ -162,6 +163,17 @@ const retestForm = reactive({ driverId: null, scheduleHour: 9, checkDate: null }
 const snapshotLines = computed(() =>
   (report.value?.snapshot || '').split(' | ').filter(Boolean)
 )
+
+// 同一份连续检测链上的换线环节：L01 → L04（尾气工位 · 值班员）
+const transferText = computed(() => {
+  const list = report.value?.transfers || []
+  if (!list.length) return '无'
+  return list
+    .slice()
+    .reverse()
+    .map((t) => `${t.fromLineNo}→${t.toLineNo}（${t.toStationName}工位 · ${t.operatorName}）`)
+    .join('；')
+})
 
 async function loadReports () {
   reports.value = await fetchReports()

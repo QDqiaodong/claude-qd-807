@@ -21,6 +21,7 @@ import com.vehicle.check.domain.Line;
 import com.vehicle.check.domain.Station;
 import com.vehicle.check.domain.Task;
 import com.vehicle.check.domain.TaskStationRecord;
+import com.vehicle.check.domain.TransferRecord;
 import com.vehicle.check.domain.Vehicle;
 import com.vehicle.check.dto.FailItemDTO;
 import com.vehicle.check.dto.OverviewVO;
@@ -29,11 +30,13 @@ import com.vehicle.check.dto.StationStatDTO;
 import com.vehicle.check.dto.StationResultRequest;
 import com.vehicle.check.dto.TaskCreateRequest;
 import com.vehicle.check.dto.TaskVO;
+import com.vehicle.check.dto.TransferRecordVO;
 import com.vehicle.check.repository.DriverRepository;
 import com.vehicle.check.repository.LineRepository;
 import com.vehicle.check.repository.StationRepository;
 import com.vehicle.check.repository.TaskRepository;
 import com.vehicle.check.repository.TaskStationRecordRepository;
+import com.vehicle.check.repository.TransferRecordRepository;
 import com.vehicle.check.repository.VehicleRepository;
 
 /**
@@ -46,6 +49,7 @@ public class TaskFlowService {
 
     private final TaskRepository taskRepository;
     private final TaskStationRecordRepository recordRepository;
+    private final TransferRecordRepository transferRepository;
     private final VehicleRepository vehicleRepository;
     private final LineRepository lineRepository;
     private final StationRepository stationRepository;
@@ -53,11 +57,13 @@ public class TaskFlowService {
     private final StringRedisTemplate redisTemplate;
 
     public TaskFlowService(TaskRepository taskRepository, TaskStationRecordRepository recordRepository,
+                           TransferRecordRepository transferRepository,
                            VehicleRepository vehicleRepository, LineRepository lineRepository,
                            StationRepository stationRepository, DriverRepository driverRepository,
                            StringRedisTemplate redisTemplate) {
         this.taskRepository = taskRepository;
         this.recordRepository = recordRepository;
+        this.transferRepository = transferRepository;
         this.vehicleRepository = vehicleRepository;
         this.lineRepository = lineRepository;
         this.stationRepository = stationRepository;
@@ -138,8 +144,11 @@ public class TaskFlowService {
             checkHour(request.getScheduleHour());
         }
 
-        first.setStatus("OCCUPIED");
-        stationRepository.save(first);
+        // 起点工位故障时不覆盖其状态：车辆建档即进入「待跨线恢复」
+        if (!"FAULT".equals(first.getStatus())) {
+            first.setStatus("OCCUPIED");
+            stationRepository.save(first);
+        }
         return toVO(taskRepository.save(task), vehicle.getPlateNo());
     }
 
@@ -156,6 +165,10 @@ public class TaskFlowService {
                 .orElseThrow(() -> new BizException("工位不存在：id=" + request.getStationId()));
         if (!station.getLineId().equals(task.getLineId())) {
             throw new BizException("工位「" + station.getStationName() + "」不属于任务所在检测线，不能录入检测值");
+        }
+        if ("FAULT".equals(station.getStatus())) {
+            throw new BizException("工位「" + station.getStationName() + "」故障中，车辆「" + vehicle.getPlateNo()
+                    + "」保持待处置：请在「跨线恢复」处置台确认转线，或待故障解除后再录入检测值");
         }
         checkStationOrder(task, station, vehicle);
 
@@ -220,8 +233,12 @@ public class TaskFlowService {
             task.setCurrentSeqNo(next.getSeqNo());
             station.setStatus("IDLE");
             stationRepository.save(station);
-            next.setStatus("OCCUPIED");
-            stationRepository.save(next);
+            // 下一工位故障时不覆盖其状态：车辆卡在故障工位上，进入「待跨线恢复」，
+            // 故障解除（置回空闲）后可继续，不能在流转中把故障状态冲掉
+            if (!"FAULT".equals(next.getStatus())) {
+                next.setStatus("OCCUPIED");
+                stationRepository.save(next);
+            }
             task.setStatus("CHECKING");
         } else {
             task.setFinishTime(LocalDateTime.now());
@@ -420,7 +437,41 @@ public class TaskFlowService {
             records.add(rvo);
         }
         vo.setRecords(records);
+        vo.setTransfers(transferViews(task.getId()));
         return vo;
+    }
+
+    /** 任务的跨线轨迹（与工位记录、报告快照同属一份连续检测链） */
+    private List<TransferRecordVO> transferViews(Long taskId) {
+        List<TransferRecord> records = transferRepository.findByTaskIdOrderByIdDesc(taskId);
+        if (records.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<Long, Station> stationMap = new java.util.HashMap<>();
+        stationRepository.findAllById(records.stream()
+                        .flatMap(r -> java.util.stream.Stream.of(r.getFromStationId(), r.getToStationId()))
+                        .collect(Collectors.toSet()))
+                .forEach(s -> stationMap.put(s.getId(), s));
+        List<TransferRecordVO> result = new ArrayList<>();
+        for (TransferRecord record : records) {
+            TransferRecordVO vo = new TransferRecordVO();
+            vo.setId(record.getId());
+            vo.setTaskId(record.getTaskId());
+            vo.setTaskNo(record.getTaskNo());
+            vo.setPlateNo(record.getPlateNo());
+            vo.setFromLineNo(record.getFromLineNo());
+            vo.setToLineNo(record.getToLineNo());
+            Station from = stationMap.get(record.getFromStationId());
+            Station to = stationMap.get(record.getToStationId());
+            vo.setFromStationName(from == null ? "" : from.getStationName());
+            vo.setToStationName(to == null ? "" : to.getStationName());
+            vo.setSeqNo(record.getSeqNo());
+            vo.setReason(record.getReason());
+            vo.setOperatorName(record.getOperatorName());
+            vo.setCreateTime(record.getCreateTime());
+            result.add(vo);
+        }
+        return result;
     }
 
     public OverviewVO overview(long lineCount, long stationCount, long vehicleCount,
@@ -430,6 +481,7 @@ public class TaskFlowService {
         vo.setStationCount(stationCount);
         vo.setVehicleCount(vehicleCount);
         vo.setCheckingCount(taskRepository.countByStatusIn(List.of("CHECKING", "RETEST")));
+        vo.setAffectedCount(affectedCount());
         vo.setReportCount(reportCount);
         vo.setFailReportCount(failReportCount);
         vo.setOverdueDeviceCount(overdueDeviceCount);
@@ -437,5 +489,16 @@ public class TaskFlowService {
         vo.setStationStats(stationStats());
         vo.setFailRank(failRank());
         return vo;
+    }
+
+    /** 待跨线恢复处置的在检车辆数（当前工位故障的在检 / 复检任务） */
+    private long affectedCount() {
+        List<Station> faultStations = stationRepository.findByStatus("FAULT");
+        if (faultStations.isEmpty()) {
+            return 0;
+        }
+        return taskRepository.findByStatusInAndCurrentStationIdInOrderByIdAsc(
+                List.of("CHECKING", "RETEST"),
+                faultStations.stream().map(Station::getId).toList()).size();
     }
 }

@@ -57,4 +57,10 @@ export const reassignTask = (taskId, driverId, hour) =>
 export const fetchDriverStats = (date) =>
   unwrap(http.get('/drivers/stats', { params: { date } }))
 
+export const fetchAffected = () => unwrap(http.get('/transfer/affected'))
+export const fetchCandidates = (taskId) => unwrap(http.get(`/transfer/tasks/${taskId}/candidates`))
+export const confirmTransfer = (taskId, payload) =>
+  unwrap(http.post(`/transfer/tasks/${taskId}/confirm`, payload))
+export const fetchTransferRecords = () => unwrap(http.get('/transfer/records'))
+
 export default http

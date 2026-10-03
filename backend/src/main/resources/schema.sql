@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS `vc_line` (
   `line_name`      VARCHAR(64)  NOT NULL COMMENT '线名',
   `line_type`      VARCHAR(24)  NOT NULL COMMENT 'SECURITY安检/ENVIRONMENT环保/COMPREHENSIVE综检',
   `status`         VARCHAR(16)  NOT NULL DEFAULT 'RUNNING' COMMENT 'RUNNING运行/STOPPED停用',
+  `accept_types`   VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '可承接车型，逗号分隔 SMALL_BUS/TRUCK/HAZMAT',
   `daily_capacity` INT          NOT NULL DEFAULT 0 COMMENT '日检测能力(台)',
   `remark`         VARCHAR(200) NULL,
   PRIMARY KEY (`id`),
@@ -123,7 +124,28 @@ CREATE TABLE IF NOT EXISTS `vc_report` (
   KEY `idx_report_task` (`task_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ---------------- 7. 设备台账 ----------------
+-- ---------------- 7. 跨线恢复处置记录 ----------------
+CREATE TABLE IF NOT EXISTS `vc_transfer_record` (
+  `id`               BIGINT       NOT NULL AUTO_INCREMENT,
+  `task_id`          BIGINT       NOT NULL COMMENT '检测任务',
+  `task_no`          VARCHAR(32)  NOT NULL,
+  `plate_no`         VARCHAR(32)  NOT NULL COMMENT '车牌（冗余，便于展示）',
+  `from_line_id`     BIGINT       NOT NULL,
+  `from_line_no`     VARCHAR(32)  NOT NULL,
+  `to_line_id`       BIGINT       NOT NULL,
+  `to_line_no`       VARCHAR(32)  NOT NULL,
+  `from_station_id`  BIGINT       NOT NULL COMMENT '迁出工位（故障工位）',
+  `to_station_id`    BIGINT       NOT NULL COMMENT '目标线承接工位',
+  `seq_no`           INT          NOT NULL COMMENT '转线发生时的工位顺序号',
+  `reason`           VARCHAR(200) NULL COMMENT '处置原因',
+  `operator_name`    VARCHAR(64)  NOT NULL COMMENT '值班员',
+  `create_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_transfer_task` (`task_id`),
+  KEY `idx_transfer_time` (`create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------- 8. 设备台账 ----------------
 CREATE TABLE IF NOT EXISTS `vc_device` (
   `id`             BIGINT      NOT NULL AUTO_INCREMENT,
   `device_name`    VARCHAR(64) NOT NULL,
@@ -138,7 +160,7 @@ CREATE TABLE IF NOT EXISTS `vc_device` (
   KEY `idx_device_next_cal` (`next_cal_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ---------------- 8. 引车员 ----------------
+-- ---------------- 9. 引车员 ----------------
 CREATE TABLE IF NOT EXISTS `vc_driver` (
   `id`            BIGINT      NOT NULL AUTO_INCREMENT,
   `driver_name`   VARCHAR(64) NOT NULL,
@@ -154,30 +176,49 @@ CREATE TABLE IF NOT EXISTS `vc_driver` (
 -- 种子数据
 -- ============================================================
 
--- 检测线（5 条）
-INSERT INTO `vc_line` (`id`,`line_no`,`line_name`,`line_type`,`status`,`daily_capacity`,`remark`) VALUES
- (1,'L01','安检一线','SECURITY','RUNNING',120,'小型客车主线，7 工位全开'),
- (2,'L02','安检二线','SECURITY','RUNNING',110,'货车与小型客车混线'),
- (3,'L03','环保尾气专用线','ENVIRONMENT','RUNNING',90,'仅承接尾气复检'),
- (4,'L04','综检线','COMPREHENSIVE','RUNNING',80,'综检与等级评定'),
- (5,'L05','危化品车专线','COMPREHENSIVE','STOPPED',0,'设备标定中，暂停接车');
+-- 检测线（5 条；accept_types 为可承接车型）
+INSERT INTO `vc_line` (`id`,`line_no`,`line_name`,`line_type`,`status`,`accept_types`,`daily_capacity`,`remark`) VALUES
+ (1,'L01','安检一线','SECURITY','RUNNING','SMALL_BUS',120,'小型客车主线，7 工位全开'),
+ (2,'L02','安检二线','SECURITY','RUNNING','SMALL_BUS,TRUCK',110,'货车与小型客车混线'),
+ (3,'L03','环保尾气专用线','ENVIRONMENT','RUNNING','SMALL_BUS,TRUCK',90,'仅承接尾气复检'),
+ (4,'L04','综检线','COMPREHENSIVE','RUNNING','SMALL_BUS,TRUCK',80,'综检与等级评定'),
+ (5,'L05','危化品车专线','COMPREHENSIVE','STOPPED','HAZMAT',0,'设备标定中，暂停接车');
 
--- 工位（L01 / L02 各 7 个，共 14 个）
+-- 工位（L01 / L02 / L04 各 7 个，L03 尾气复检 3 个，L05 危化品专线 7 个，共 31 个）
+-- 说明：L01 尾气工位(3) 初始即故障 → 任务 1 成为「待跨线恢复」演示数据；
+--       L02 底盘工位(13) 故障 → 候选评估时会被「下游工位故障」排除。
 INSERT INTO `vc_station` (`id`,`line_id`,`station_type`,`station_name`,`seq_no`,`status`,`device_id`,`remark`) VALUES
  (1,1,'LOGIN','登录',1,'IDLE',NULL,'车辆唯一性确认'),
  (2,1,'APPEARANCE','外观',2,'IDLE',5,'车身与灯具外观查验'),
- (3,1,'EMISSION','尾气',3,'IDLE',1,'汽油车双怠速法'),
+ (3,1,'EMISSION','尾气',3,'FAULT',1,'汽油车双怠速法（分析仪故障待修）'),
  (4,1,'BRAKE','制动',4,'IDLE',2,'滚筒反力式制动台'),
  (5,1,'LIGHT','灯光',5,'IDLE',3,'前照灯远光发光强度'),
  (6,1,'CHASSIS','底盘',6,'IDLE',6,'转向/悬挂/传动间隙'),
  (7,1,'FINAL','总检',7,'IDLE',NULL,'结论复核与签发'),
  (8,2,'LOGIN','登录',1,'IDLE',NULL,'证件与号牌核验'),
- (9,2,'APPEARANCE','外观',2,'OCCUPIED',5,'外廓尺寸与车身'),
- (10,2,'EMISSION','尾气',3,'IDLE',1,'柴油车自由加速法'),
- (11,2,'BRAKE','制动',4,'IDLE',2,'制动率与阻滞率'),
- (12,2,'LIGHT','灯光',5,'IDLE',3,'远近光偏移'),
- (13,2,'CHASSIS','底盘',6,'FAULT',6,'底盘间隙仪待修'),
- (14,2,'FINAL','总检',7,'IDLE',NULL,'报告签发');
+ (9,2,'APPEARANCE','外观',2,'OCCUPIED',12,'外廓尺寸与车身'),
+ (10,2,'EMISSION','尾气',3,'IDLE',9,'柴油车自由加速法'),
+ (11,2,'BRAKE','制动',4,'IDLE',10,'制动率与阻滞率'),
+ (12,2,'LIGHT','灯光',5,'IDLE',11,'远近光偏移'),
+ (13,2,'CHASSIS','底盘',6,'FAULT',13,'底盘间隙仪待修'),
+ (14,2,'FINAL','总检',7,'IDLE',NULL,'报告签发'),
+ (15,3,'LOGIN','登录',1,'IDLE',NULL,'尾气复检登录'),
+ (16,3,'EMISSION','尾气',3,'IDLE',19,'尾气复检专用工位'),
+ (17,3,'FINAL','总检',7,'IDLE',NULL,'复检结论复核'),
+ (18,4,'LOGIN','登录',1,'IDLE',NULL,'综检登录'),
+ (19,4,'APPEARANCE','外观',2,'IDLE',18,'综检外观查验'),
+ (20,4,'EMISSION','尾气',3,'IDLE',14,'综检尾气检测'),
+ (21,4,'BRAKE','制动',4,'IDLE',15,'综检制动台'),
+ (22,4,'LIGHT','灯光',5,'IDLE',16,'综检灯光检测'),
+ (23,4,'CHASSIS','底盘',6,'IDLE',17,'综检底盘测功'),
+ (24,4,'FINAL','总检',7,'IDLE',NULL,'综检结论与等级评定'),
+ (25,5,'LOGIN','登录',1,'IDLE',NULL,'危化品车登录'),
+ (26,5,'APPEARANCE','外观',2,'IDLE',NULL,'危化品标识查验'),
+ (27,5,'EMISSION','尾气',3,'IDLE',NULL,'危化品车尾气'),
+ (28,5,'BRAKE','制动',4,'IDLE',NULL,'危化品车制动'),
+ (29,5,'LIGHT','灯光',5,'IDLE',NULL,'危化品车灯光'),
+ (30,5,'CHASSIS','底盘',6,'IDLE',NULL,'危化品车底盘'),
+ (31,5,'FINAL','总检',7,'IDLE',NULL,'危化品车总检');
 
 -- 车辆与送检（12 辆；身份证/手机号为 AES 密文）
 INSERT INTO `vc_vehicle` (`id`,`plate_no`,`owner_name`,`owner_id_no`,`owner_phone`,`vehicle_type`,`register_date`,`mileage`,`fuel_type`,`submitter`,`appoint_time`,`create_time`) VALUES
@@ -265,7 +306,7 @@ INSERT INTO `vc_report` (`id`,`report_no`,`task_id`,`plate_no`,`line_no`,`conclu
  (4,'RPT-20260927-004',9,'京A·K339L','L02','FAIL','不合格','外观:缺陷3项 不合格 | 尾气:CO 0.150%/HC 38ppm 合格 | 制动:73.50% 合格 | 灯光:20400cd 合格 | 底盘:转向横拉杆球头松旷 不合格','外观 缺陷3项超限;底盘 转向横拉杆球头松旷','授权签字人 何工','2026-09-27','','2026-09-27 11:42:00'),
  (5,'RPT-20260926-005',6,'京A·3M92X','L01','PASS','合格','外观:缺陷0项 合格 | 尾气:CO 0.090%/HC 21ppm 合格 | 制动:78.20% 合格 | 灯光:21500cd 合格 | 底盘:缺陷0项 合格','','授权签字人 何工','2026-09-26','RPT-20260925-000','2026-09-26 16:20:00');
 
--- 设备台账（8 台；含超期、临期）
+-- 设备台账（19 台；1-8 为 L01 在用（含超期、临期），9-13 属 L02，14-18 属 L04，19 属 L03）
 INSERT INTO `vc_device` (`id`,`device_name`,`model`,`device_type`,`last_cal_date`,`next_cal_date`,`cal_org`,`cal_result`,`status`) VALUES
  (1,'尾气分析仪','MQW-511','EMISSION','2025-12-10','2026-09-20','省计量院','PASS','OVERDUE'),
  (2,'制动试验台','ZD-3000B','BRAKE','2026-03-15','2026-09-25','省计量院','PASS','OVERDUE'),
@@ -274,7 +315,18 @@ INSERT INTO `vc_device` (`id`,`device_name`,`model`,`device_type`,`last_cal_date
  (5,'外观查验终端','WG-PAD-12','APPEARANCE','2026-08-01','2026-11-01','站自校','PASS','NORMAL'),
  (6,'底盘间隙仪','JX-880','CHASSIS','2026-05-10','2026-09-29','市计量所','PASS','DUE'),
  (7,'OBD 诊断仪','OBD-900','EMISSION','2026-04-01','2026-10-15','厂家校准','PASS','NORMAL'),
- (8,'车速表检验台','CS-500','BRAKE','2026-02-01','2026-09-18','省计量院','FAIL','OVERDUE');
+ (8,'车速表检验台','CS-500','BRAKE','2026-02-01','2026-09-18','省计量院','FAIL','OVERDUE'),
+ (9,'尾气分析仪B','MQW-512','EMISSION','2026-06-01','2026-12-01','省计量院','PASS','NORMAL'),
+ (10,'制动试验台B','ZD-3000C','BRAKE','2026-05-15','2026-11-15','省计量院','PASS','NORMAL'),
+ (11,'灯光检测仪B','NHD-8200','LIGHT','2026-04-20','2026-10-20','市计量所','PASS','NORMAL'),
+ (12,'外观查验终端B','WG-PAD-13','APPEARANCE','2026-07-01','2027-01-01','站自校','PASS','NORMAL'),
+ (13,'底盘间隙仪B','JX-880S','CHASSIS','2026-04-10','2026-10-08','市计量所','PASS','DUE'),
+ (14,'尾气分析仪C','MQW-520','EMISSION','2026-06-10','2026-12-10','省计量院','PASS','NORMAL'),
+ (15,'制动试验台C','ZD-3100','BRAKE','2026-05-30','2026-11-30','省计量院','PASS','NORMAL'),
+ (16,'灯光检测仪C','NHD-8300','LIGHT','2026-04-25','2026-10-25','市计量所','PASS','NORMAL'),
+ (17,'底盘测功机B','DCG-2100','CHASSIS','2026-05-20','2026-11-20','省计量院','PASS','NORMAL'),
+ (18,'外观查验终端C','WG-PAD-14','APPEARANCE','2026-08-01','2027-02-01','站自校','PASS','NORMAL'),
+ (19,'尾气分析仪（复检）','MQW-511R','EMISSION','2026-06-30','2026-12-31','省计量院','PASS','NORMAL');
 
 -- 引车员（6 名）
 INSERT INTO `vc_driver` (`id`,`driver_name`,`cert_level`,`cert_no`,`shift_hours`,`checked_count`,`status`) VALUES

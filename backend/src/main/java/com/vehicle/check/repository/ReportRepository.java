@@ -2,6 +2,7 @@ package com.vehicle.check.repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -17,6 +18,11 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     List<Report> findByTaskIdOrderByIdDesc(Long taskId);
 
     List<Report> findByConclusionOrderBySignDateDesc(String conclusion);
+
+    /**
+     * 某车牌最近一份指定结论的报告（复检任务转线时展示「关联原报告」）
+     */
+    Optional<Report> findFirstByPlateNoAndConclusionOrderByIdDesc(String plateNo, String conclusion);
 
     long countBySignDate(LocalDate signDate);
 

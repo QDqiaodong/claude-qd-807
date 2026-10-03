@@ -42,4 +42,6 @@ public class TaskVO {
     private LocalDateTime createTime;
     private LocalDateTime finishTime;
     private List<RecordVO> records = new ArrayList<>();
+    /** 跨线恢复轨迹（空 = 未发生过转线） */
+    private List<TransferRecordVO> transfers = new ArrayList<>();
 }

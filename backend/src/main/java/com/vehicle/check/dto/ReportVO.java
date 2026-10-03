@@ -26,6 +26,8 @@ public class ReportVO {
     private String snapshot;
     private List<String> failItems = new ArrayList<>();
     private List<BadgeVO> badges = new ArrayList<>();
+    /** 跨线恢复轨迹：报告与任务共用同一份连续检测链，换线环节在此留痕 */
+    private List<TransferRecordVO> transfers = new ArrayList<>();
     private String signer;
     private LocalDate signDate;
     private String retestOf;

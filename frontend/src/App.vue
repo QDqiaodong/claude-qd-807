@@ -8,6 +8,9 @@
       </div>
       <div class="vc-top-kpis">
         <div class="vc-kpi">在检 <b>{{ overview.checkingCount ?? '-' }}</b></div>
+        <div class="vc-kpi" :class="{ danger: (overview.affectedCount || 0) > 0 }">
+          待处置 <b>{{ overview.affectedCount ?? '-' }}</b>
+        </div>
         <div class="vc-kpi">报告 <b>{{ overview.reportCount ?? '-' }}</b></div>
         <div class="vc-kpi">不合格 <b>{{ overview.failReportCount ?? '-' }}</b></div>
         <div class="vc-kpi" :class="{ danger: (overview.overdueDeviceCount || 0) > 0 }">
@@ -79,13 +82,15 @@ import FlowView from './views/FlowView.vue'
 import ReportView from './views/ReportView.vue'
 import ScheduleView from './views/ScheduleView.vue'
 import DeviceView from './views/DeviceView.vue'
+import RecoveryView from './views/RecoveryView.vue'
 import { fetchPipeline, fetchOverview } from './api'
 
 const VIEW_MAP = {
   '/flow': FlowView,
   '/report': ReportView,
   '/schedule': ScheduleView,
-  '/device': DeviceView
+  '/device': DeviceView,
+  '/recovery': RecoveryView
 }
 
 const currentPath = ref('/flow')
@@ -95,7 +100,8 @@ const views = [
   { path: '/flow', label: '工位流水线' },
   { path: '/report', label: '检测报告' },
   { path: '/schedule', label: '引车员排班' },
-  { path: '/device', label: '设备标定' }
+  { path: '/device', label: '设备标定' },
+  { path: '/recovery', label: '跨线恢复' }
 ]
 
 const stations = ref([])
@@ -119,6 +125,9 @@ provide('pipeline', {
   },
   clearStation () {
     activeStation.value = null
+  },
+  reload () {
+    load()
   }
 })
 

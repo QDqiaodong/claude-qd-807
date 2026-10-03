@@ -9,7 +9,7 @@ import jakarta.persistence.Table;
 import lombok.Data;
 
 /**
- * 检测线：线号、类型（安检/环保/综检）、状态（运行/停用）
+ * 检测线：线号、类型（安检/环保/综检）、状态（运行/停用）、可承接车型（跨线恢复候选评估用）
  */
 @Data
 @Entity
@@ -31,6 +31,9 @@ public class Line {
 
     @Column(name = "status", nullable = false)
     private String status;
+
+    @Column(name = "accept_types", nullable = false)
+    private String acceptTypes;
 
     @Column(name = "daily_capacity")
     private Integer dailyCapacity;
