@@ -75,6 +75,10 @@ public class Task {
     @Column(name = "retest_times", nullable = false)
     private Integer retestTimes;
 
+    /** 复检任务关联的原报告编号；跨线恢复后必须原样保留，不能因换线洗掉 */
+    @Column(name = "origin_report_no")
+    private String originReportNo;
+
     @Column(name = "create_time")
     private LocalDateTime createTime;
 

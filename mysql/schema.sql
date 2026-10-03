@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS `vc_line` (
   `line_type`      VARCHAR(24)  NOT NULL COMMENT 'SECURITY安检/ENVIRONMENT环保/COMPREHENSIVE综检',
   `status`         VARCHAR(16)  NOT NULL DEFAULT 'RUNNING' COMMENT 'RUNNING运行/STOPPED停用',
   `daily_capacity` INT          NOT NULL DEFAULT 0 COMMENT '日检测能力(台)',
+  `accept_vehicle_types` VARCHAR(100) NOT NULL DEFAULT 'SMALL_BUS,TRUCK,HAZMAT'
+                        COMMENT '承接车辆类型，逗号分隔 SMALL_BUS/TRUCK/HAZMAT',
   `remark`         VARCHAR(200) NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_line_no` (`line_no`)
@@ -77,6 +79,7 @@ CREATE TABLE IF NOT EXISTS `vc_task` (
   `light_intensity`    INT           NULL COMMENT '灯光强度(cd)',
   `chassis_defects`    VARCHAR(200)  NULL COMMENT '底盘缺陷项',
   `retest_times`       INT           NOT NULL DEFAULT 0 COMMENT '复检次数',
+  `origin_report_no`   VARCHAR(32)   NULL COMMENT '复检任务关联的原报告编号（转线后仍保留，不能因换线洗掉）',
   `create_time`        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `finish_time`        DATETIME      NULL,
   PRIMARY KEY (`id`),
@@ -101,6 +104,35 @@ CREATE TABLE IF NOT EXISTS `vc_task_station_record` (
   PRIMARY KEY (`id`),
   KEY `idx_record_task` (`task_id`),
   KEY `idx_record_station_type` (`station_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------- 5b. 在检车辆跨线恢复处置记录 ----------------
+-- 只允许一次跨线恢复成功：success_episode_key 仅在 SUCCESS 时落值（MySQL 唯一索引允许多个 NULL），
+-- 两名值班人员同时确认 / 目标工位瞬间被占用时，由「目标工位原子占位 UPDATE + 该唯一索引」共同兜底；
+-- FAILED / PENDING 可留多条处置痕迹。
+CREATE TABLE IF NOT EXISTS `vc_line_transfer` (
+  `id`               BIGINT       NOT NULL AUTO_INCREMENT,
+  `task_id`          BIGINT       NOT NULL COMMENT '受影响检测任务（检测链不换号）',
+  `task_no`          VARCHAR(32)  NOT NULL,
+  `plate_no`         VARCHAR(32)  NOT NULL,
+  `from_line_id`     BIGINT       NOT NULL COMMENT '故障发生线',
+  `from_line_no`     VARCHAR(32)  NOT NULL,
+  `fault_station_id` BIGINT       NOT NULL COMMENT '故障工位（车辆当前所在/卡住的工位）',
+  `fault_station_type` VARCHAR(24) NOT NULL,
+  `fault_seq_no`     INT          NOT NULL COMMENT '从第几个工位转走',
+  `to_line_id`       BIGINT       NULL COMMENT '目标线；无可用目标保持待处置时为空',
+  `to_line_no`       VARCHAR(32)  NULL,
+  `target_station_id` BIGINT      NULL COMMENT '目标线接续工位',
+  `result`           VARCHAR(16)  NOT NULL COMMENT 'SUCCESS转线成功/FAILED尝试失败/PENDING保持待处置',
+  `fail_reason`      VARCHAR(300) NULL COMMENT '失败/保持待处置的明确原因',
+  `episode_key`      VARCHAR(64)  NOT NULL COMMENT '处置幕：任务id + 故障工位id',
+  `success_episode_key` VARCHAR(64) NULL COMMENT 'SUCCESS 幂等键，同幕唯一；非成功为 NULL',
+  `operator_name`    VARCHAR(64)  NOT NULL COMMENT '处置值班人员',
+  `transfer_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_transfer_success_episode` (`success_episode_key`),
+  KEY `idx_transfer_task` (`task_id`),
+  KEY `idx_transfer_time` (`transfer_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------- 6. 检测报告 ----------------
@@ -154,30 +186,46 @@ CREATE TABLE IF NOT EXISTS `vc_driver` (
 -- 种子数据
 -- ============================================================
 
--- 检测线（5 条）
-INSERT INTO `vc_line` (`id`,`line_no`,`line_name`,`line_type`,`status`,`daily_capacity`,`remark`) VALUES
- (1,'L01','安检一线','SECURITY','RUNNING',120,'小型客车主线，7 工位全开'),
- (2,'L02','安检二线','SECURITY','RUNNING',110,'货车与小型客车混线'),
- (3,'L03','环保尾气专用线','ENVIRONMENT','RUNNING',90,'仅承接尾气复检'),
- (4,'L04','综检线','COMPREHENSIVE','RUNNING',80,'综检与等级评定'),
- (5,'L05','危化品车专线','COMPREHENSIVE','STOPPED',0,'设备标定中，暂停接车');
+-- 检测线（6 条）
+INSERT INTO `vc_line` (`id`,`line_no`,`line_name`,`line_type`,`status`,`daily_capacity`,`accept_vehicle_types`,`remark`) VALUES
+ (1,'L01','安检一线','SECURITY','RUNNING',120,'SMALL_BUS,TRUCK,HAZMAT','小型客车主线，7 工位全开'),
+ (2,'L02','安检二线','SECURITY','RUNNING',110,'SMALL_BUS,TRUCK','货车与小型客车混线（不承接危化品车）'),
+ (3,'L03','环保尾气专用线','ENVIRONMENT','RUNNING',90,'SMALL_BUS,TRUCK,HAZMAT','仅尾气单工位线，不能整线承接剩余工序'),
+ (4,'L04','综检线','COMPREHENSIVE','RUNNING',80,'SMALL_BUS,TRUCK,HAZMAT','综检与等级评定，7 工位设备标定有效，可承接转线'),
+ (5,'L05','危化品车专线','COMPREHENSIVE','STOPPED',0,'HAZMAT','设备标定中，暂停接车'),
+ (6,'L06','安检三线','SECURITY','RUNNING',100,'SMALL_BUS,TRUCK','7 工位空载，但制动/灯光设备标定超期，不可承接');
 
--- 工位（L01 / L02 各 7 个，共 14 个）
+-- 工位（L01 / L02 / L04 / L06 各 7 个，L03 仅尾气 1 个，共 29 个）
 INSERT INTO `vc_station` (`id`,`line_id`,`station_type`,`station_name`,`seq_no`,`status`,`device_id`,`remark`) VALUES
  (1,1,'LOGIN','登录',1,'IDLE',NULL,'车辆唯一性确认'),
  (2,1,'APPEARANCE','外观',2,'IDLE',5,'车身与灯具外观查验'),
- (3,1,'EMISSION','尾气',3,'IDLE',1,'汽油车双怠速法'),
+ (3,1,'EMISSION','尾气',3,'FAULT',1,'汽油车双怠速法；分析仪故障，在线车辆需跨线'),
  (4,1,'BRAKE','制动',4,'IDLE',2,'滚筒反力式制动台'),
  (5,1,'LIGHT','灯光',5,'IDLE',3,'前照灯远光发光强度'),
  (6,1,'CHASSIS','底盘',6,'IDLE',6,'转向/悬挂/传动间隙'),
- (7,1,'FINAL','总检',7,'IDLE',NULL,'结论复核与签发'),
+ (7,1,'FINAL','总检',7,'FAULT',NULL,'总检终端故障，结论复核需跨线'),
  (8,2,'LOGIN','登录',1,'IDLE',NULL,'证件与号牌核验'),
- (9,2,'APPEARANCE','外观',2,'OCCUPIED',5,'外廓尺寸与车身'),
+ (9,2,'APPEARANCE','外观',2,'FAULT',5,'外廓尺寸与车身；查验终端故障'),
  (10,2,'EMISSION','尾气',3,'IDLE',1,'柴油车自由加速法'),
  (11,2,'BRAKE','制动',4,'IDLE',2,'制动率与阻滞率'),
  (12,2,'LIGHT','灯光',5,'IDLE',3,'远近光偏移'),
  (13,2,'CHASSIS','底盘',6,'FAULT',6,'底盘间隙仪待修'),
- (14,2,'FINAL','总检',7,'IDLE',NULL,'报告签发');
+ (14,2,'FINAL','总检',7,'IDLE',NULL,'报告签发'),
+ (15,4,'LOGIN','登录',1,'IDLE',NULL,'车辆唯一性确认'),
+ (16,4,'APPEARANCE','外观',2,'IDLE',5,'车身与灯具外观查验'),
+ (17,4,'EMISSION','尾气',3,'IDLE',7,'汽油/柴油通用尾气检测（设备标定有效）'),
+ (18,4,'BRAKE','制动',4,'IDLE',9,'滚筒反力式制动台（设备标定有效）'),
+ (19,4,'LIGHT','灯光',5,'IDLE',10,'前照灯远光发光强度（设备标定有效）'),
+ (20,4,'CHASSIS','底盘',6,'IDLE',4,'转向/悬挂/传动间隙'),
+ (21,4,'FINAL','总检',7,'IDLE',NULL,'结论复核与签发'),
+ (22,6,'LOGIN','登录',1,'IDLE',NULL,'车辆唯一性确认'),
+ (23,6,'APPEARANCE','外观',2,'IDLE',5,'车身与灯具外观查验'),
+ (24,6,'EMISSION','尾气',3,'IDLE',1,'汽油车双怠速法'),
+ (25,6,'BRAKE','制动',4,'IDLE',11,'制动试验台标定已超期，不可承接'),
+ (26,6,'LIGHT','灯光',5,'IDLE',12,'灯光检测仪标定已超期，不可承接'),
+ (27,6,'CHASSIS','底盘',6,'IDLE',13,'底盘间隙仪标定已超期，不可承接'),
+ (28,6,'FINAL','总检',7,'IDLE',NULL,'结论复核与签发'),
+ (29,3,'EMISSION','尾气',3,'IDLE',7,'环保专用线仅尾气单工位，缺少后续工位序列');
 
 -- 车辆与送检（12 辆；身份证/手机号为 AES 密文）
 INSERT INTO `vc_vehicle` (`id`,`plate_no`,`owner_name`,`owner_id_no`,`owner_phone`,`vehicle_type`,`register_date`,`mileage`,`fuel_type`,`submitter`,`appoint_time`,`create_time`) VALUES
@@ -195,17 +243,18 @@ INSERT INTO `vc_vehicle` (`id`,`plate_no`,`owner_name`,`owner_id_no`,`owner_phon
  (12,'京B·T8845','马志强',AES_ENCRYPT('110113198409173316','seed_key'),AES_ENCRYPT('13311506692','seed_key'),'TRUCK','2016-10-08',398500,'DIESEL','马志强','2026-09-28 10:00:00','2026-09-27 10:33:00');
 
 -- 检测任务（10 条；brake_rate 库存小数）
-INSERT INTO `vc_task` (`id`,`task_no`,`vehicle_id`,`line_id`,`current_station_id`,`current_seq_no`,`status`,`driver_id`,`schedule_hour`,`check_date`,`co_value`,`hc_value`,`brake_rate`,`light_intensity`,`chassis_defects`,`retest_times`,`create_time`,`finish_time`) VALUES
- (1,'TASK-20260927-001',1,1,3,3,'CHECKING',1,9,'2026-09-27',NULL,NULL,NULL,NULL,NULL,0,'2026-09-27 08:41:00',NULL),
- (2,'TASK-20260927-002',2,1,5,5,'CHECKING',1,8,'2026-09-27',0.120,32,NULL,NULL,NULL,0,'2026-09-27 08:23:00',NULL),
- (3,'TASK-20260927-003',3,1,6,6,'CHECKING',2,10,'2026-09-27',0.180,41,0.7130,18200,NULL,0,'2026-09-27 09:06:00',NULL),
- (4,'TASK-20260927-004',4,1,2,2,'CHECKING',2,11,'2026-09-27',NULL,NULL,NULL,NULL,NULL,0,'2026-09-27 09:13:00',NULL),
- (5,'TASK-20260927-005',5,1,7,7,'CHECKING',3,13,'2026-09-27',0.260,48,0.6640,16500,NULL,0,'2026-09-27 09:21:00',NULL),
- (6,'TASK-20260927-006',6,1,7,7,'PASS',4,9,'2026-09-27',0.090,21,0.7820,21500,'',0,'2026-09-27 09:32:00','2026-09-27 10:18:00'),
- (7,'TASK-20260927-007',7,2,7,7,'PASS',4,14,'2026-09-27',0.210,55,0.6910,19800,'',0,'2026-09-27 09:45:00','2026-09-27 11:02:00'),
- (8,'TASK-20260927-008',8,2,7,7,'FAIL',5,15,'2026-09-27',0.480,96,0.7120,17200,'制动管路渗漏',0,'2026-09-27 09:51:00','2026-09-27 11:26:00'),
- (9,'TASK-20260927-009',9,2,14,7,'FAIL',5,16,'2026-09-27',0.150,38,0.7350,20400,'转向横拉杆球头松旷',0,'2026-09-27 10:03:00','2026-09-27 11:41:00'),
- (10,'TASK-20260927-010',8,2,9,2,'RETEST',5,17,'2026-09-27',NULL,NULL,NULL,NULL,NULL,1,'2026-09-27 11:27:00',NULL);
+INSERT INTO `vc_task` (`id`,`task_no`,`vehicle_id`,`line_id`,`current_station_id`,`current_seq_no`,`status`,`driver_id`,`schedule_hour`,`check_date`,`co_value`,`hc_value`,`brake_rate`,`light_intensity`,`chassis_defects`,`retest_times`,`origin_report_no`,`create_time`,`finish_time`) VALUES
+ (1,'TASK-20260927-001',1,1,3,3,'CHECKING',1,9,'2026-09-27',NULL,NULL,NULL,NULL,NULL,0,NULL,'2026-09-27 08:41:00',NULL),
+ (2,'TASK-20260927-002',2,1,5,5,'CHECKING',1,8,'2026-09-27',0.120,32,NULL,NULL,NULL,0,NULL,'2026-09-27 08:23:00',NULL),
+ (3,'TASK-20260927-003',3,1,6,6,'CHECKING',2,10,'2026-09-27',0.180,41,0.7130,18200,NULL,0,NULL,'2026-09-27 09:06:00',NULL),
+ (4,'TASK-20260927-004',4,1,2,2,'CHECKING',2,11,'2026-09-27',NULL,NULL,NULL,NULL,NULL,0,NULL,'2026-09-27 09:13:00',NULL),
+ (5,'TASK-20260927-005',5,1,7,7,'CHECKING',3,13,'2026-09-27',0.260,48,0.6640,16500,NULL,0,NULL,'2026-09-27 09:21:00',NULL),
+ (6,'TASK-20260927-006',6,1,7,7,'PASS',4,9,'2026-09-27',0.090,21,0.7820,21500,'',0,NULL,'2026-09-27 09:32:00','2026-09-27 10:18:00'),
+ (7,'TASK-20260927-007',7,2,7,7,'PASS',4,14,'2026-09-27',0.210,55,0.6910,19800,'',0,NULL,'2026-09-27 09:45:00','2026-09-27 11:02:00'),
+ (8,'TASK-20260927-008',8,2,7,7,'FAIL',5,15,'2026-09-27',0.480,96,0.7120,17200,'制动管路渗漏',0,NULL,'2026-09-27 09:51:00','2026-09-27 11:26:00'),
+ (9,'TASK-20260927-009',9,2,14,7,'FAIL',5,16,'2026-09-27',0.150,38,0.7350,20400,'转向横拉杆球头松旷',0,NULL,'2026-09-27 10:03:00','2026-09-27 11:41:00'),
+ (10,'TASK-20260927-010',8,2,9,2,'RETEST',5,17,'2026-09-27',NULL,NULL,NULL,NULL,NULL,1,'RPT-20260927-003','2026-09-27 11:27:00',NULL),
+ (11,'TASK-20260928-011',12,2,13,6,'CHECKING',2,10,'2026-09-28',0.130,35,0.7060,NULL,NULL,0,NULL,'2026-09-28 09:42:00',NULL);
 
 -- 工位流转记录（带各工位结果值）
 INSERT INTO `vc_task_station_record` (`id`,`task_id`,`station_id`,`station_type`,`seq_no`,`item_name`,`result`,`value_text`,`operator_name`,`driver_id`,`record_time`) VALUES
@@ -255,7 +304,12 @@ INSERT INTO `vc_task_station_record` (`id`,`task_id`,`station_id`,`station_type`
  (44,9,5,'LIGHT',5,'前照灯发光强度','PASS','灯光强度 20400cd','孙灯光',5,'2026-09-27 11:05:00'),
  (45,9,6,'CHASSIS',6,'底盘间隙与转向系','FAIL','转向横拉杆球头松旷','郑底盘',5,'2026-09-27 11:41:00'),
  (46,10,1,'LOGIN',1,'车辆唯一性确认','PASS','车牌 京A·W7710 复检登录','陈登录',5,'2026-09-27 17:05:00'),
- (47,9,14,'FINAL',7,'总检复核','FAIL','关键项不合格 1 项（底盘），判定不合格','何总检',5,'2026-09-27 11:41:00');
+ (47,9,14,'FINAL',7,'总检复核','FAIL','关键项不合格 1 项（底盘），判定不合格','何总检',5,'2026-09-27 11:41:00'),
+ (48,11,8,'LOGIN',1,'车辆唯一性确认','PASS','车牌 京B·T8845 与行驶证一致','陈登录',2,'2026-09-28 09:44:00'),
+ (49,11,9,'APPEARANCE',2,'外观与灯具查验','PASS','外观缺陷 1 项','刘外观',2,'2026-09-28 09:55:00'),
+ (50,11,10,'EMISSION',3,'尾气 CO/HC 检测','PASS','CO=0.130%，HC=35ppm','周尾气',2,'2026-09-28 10:09:00'),
+ (51,11,11,'BRAKE',4,'制动率检测','PASS','制动率 70.60%','吴制动',2,'2026-09-28 10:26:00'),
+ (52,11,12,'LIGHT',5,'前照灯发光强度','PASS','灯光强度 18600cd','孙灯光',2,'2026-09-28 10:41:00');
 
 -- 检测报告（5 份；含分项快照、不合格项、复检关联）
 INSERT INTO `vc_report` (`id`,`report_no`,`task_id`,`plate_no`,`line_no`,`conclusion`,`conclusion_name`,`snapshot`,`fail_items`,`signer`,`sign_date`,`retest_of`,`create_time`) VALUES
@@ -274,7 +328,12 @@ INSERT INTO `vc_device` (`id`,`device_name`,`model`,`device_type`,`last_cal_date
  (5,'外观查验终端','WG-PAD-12','APPEARANCE','2026-08-01','2026-11-01','站自校','PASS','NORMAL'),
  (6,'底盘间隙仪','JX-880','CHASSIS','2026-05-10','2026-09-29','市计量所','PASS','DUE'),
  (7,'OBD 诊断仪','OBD-900','EMISSION','2026-04-01','2026-10-15','厂家校准','PASS','NORMAL'),
- (8,'车速表检验台','CS-500','BRAKE','2026-02-01','2026-09-18','省计量院','FAIL','OVERDUE');
+ (8,'车速表检验台','CS-500','BRAKE','2026-02-01','2026-09-18','省计量院','FAIL','OVERDUE'),
+ (9,'综检制动试验台','ZD-5000A','BRAKE','2026-08-10','2027-02-10','省计量院','PASS','NORMAL'),
+ (10,'综检灯光检测仪','NHD-9200','LIGHT','2026-08-20','2027-02-20','省计量院','PASS','NORMAL'),
+ (11,'三线制动试验台','ZD-3000C','BRAKE','2026-01-10','2026-07-10','省计量院','PASS','OVERDUE'),
+ (12,'三线灯光检测仪','NHD-8102','LIGHT','2026-01-12','2026-07-12','市计量所','PASS','OVERDUE'),
+ (13,'三线底盘间隙仪','JX-770','CHASSIS','2026-02-02','2026-08-02','市计量所','PASS','OVERDUE');
 
 -- 引车员（6 名）
 INSERT INTO `vc_driver` (`id`,`driver_name`,`cert_level`,`cert_no`,`shift_hours`,`checked_count`,`status`) VALUES

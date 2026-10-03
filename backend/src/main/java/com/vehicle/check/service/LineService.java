@@ -90,10 +90,9 @@ public class LineService {
         if (!List.of("IDLE", "OCCUPIED", "FAULT").contains(status)) {
             throw new BizException("工位状态只能是 空闲(IDLE) / 占用(OCCUPIED) / 故障(FAULT)");
         }
-        if ("FAULT".equals(status) && queueCountOf(station.getId()) > 0) {
-            throw new BizException("工位「" + station.getStationName() + "」上仍有 " + queueCountOf(station.getId())
-                    + " 台车在排队，不能置为故障");
-        }
+        // 工位故障时允许保留上面的在检车辆：它们正是「跨线恢复处置台」的处置对象；
+        // 车辆不会丢——处置台会把任务指针与工位占位原子迁到目标线。故障解除（改回 IDLE）后，
+        // 仍在原线等待的车辆可直接回原线继续。
         station.setStatus(status);
         return stationRepository.save(station);
     }
@@ -103,14 +102,6 @@ public class LineService {
                 "IDLE", stationRepository.countByStatus("IDLE"),
                 "OCCUPIED", stationRepository.countByStatus("OCCUPIED"),
                 "FAULT", stationRepository.countByStatus("FAULT"));
-    }
-
-    private long queueCountOf(Long stationId) {
-        return taskRepository.countQueueGroupByStation().stream()
-                .filter(dto -> stationId.equals(dto.getStationId()))
-                .map(StationQueueDTO::getQueueCount)
-                .findFirst()
-                .orElse(0L);
     }
 
     /** 工位类型 → 工位（按检测线） */

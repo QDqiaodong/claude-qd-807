@@ -26,6 +26,11 @@
               {{ t.statusName }}
             </el-tag>
             <span class="vc-muted">第 {{ t.currentSeqNo }} 工位 · {{ t.currentStationName }}</span>
+            <el-button
+              v-if="faultStationIds.has(t.currentStationId)"
+              size="small" type="danger" plain style="margin-left: auto; padding: 2px 8px;"
+              @click.stop="goRecovery"
+            >去跨线处置</el-button>
           </div>
         </div>
         <el-empty v-if="!tasks.length" description="暂无在检车辆" :image-size="60" />
@@ -253,8 +258,10 @@ import {
   fetchVehicle,
   createVehicle,
   fetchLines,
-  fetchDrivers
+  fetchDrivers,
+  fetchAllStations
 } from '../api'
+import router from '../router'
 
 const HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
 const CHASSIS_OPTIONS = [
@@ -271,10 +278,18 @@ const tasks = ref([])
 const vehicles = ref([])
 const drivers = ref([])
 const lines = ref([])
+const allStations = ref([])
 const stats = ref([])
 const failRank = ref([])
 const current = ref(null)
 const vehicle = ref(null)
+
+const faultStationIds = computed(() =>
+  new Set(allStations.value.filter((s) => s.status === 'FAULT').map((s) => s.id)))
+
+function goRecovery () {
+  router.push('/recovery')
+}
 
 const stationVisible = ref(false)
 const taskVisible = ref(false)
@@ -343,6 +358,7 @@ async function loadAll () {
   vehicles.value = await fetchVehicles()
   drivers.value = await fetchDrivers()
   lines.value = await fetchLines()
+  allStations.value = await fetchAllStations()
 }
 
 async function selectTask (t) {

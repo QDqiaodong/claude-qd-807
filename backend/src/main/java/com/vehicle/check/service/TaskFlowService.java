@@ -393,6 +393,7 @@ public class TaskFlowService {
         vo.setLightIntensity(task.getLightIntensity());
         vo.setChassisDefects(task.getChassisDefects());
         vo.setRetestTimes(task.getRetestTimes());
+        vo.setOriginReportNo(task.getOriginReportNo());
         vo.setCreateTime(task.getCreateTime());
         vo.setFinishTime(task.getFinishTime());
 

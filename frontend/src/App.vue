@@ -66,6 +66,9 @@
           @click="go(v.path)"
         >
           {{ v.label }}
+          <i v-if="v.path === '/recovery' && recoveryCount > 0" class="vc-view-badge">
+            {{ recoveryCount }}
+          </i>
         </span>
       </div>
     </footer>
@@ -73,16 +76,18 @@
 </template>
 
 <script setup>
-import { computed, onMounted, provide, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, provide, reactive, ref } from 'vue'
 import router from './router'
 import FlowView from './views/FlowView.vue'
+import RecoveryView from './views/RecoveryView.vue'
 import ReportView from './views/ReportView.vue'
 import ScheduleView from './views/ScheduleView.vue'
 import DeviceView from './views/DeviceView.vue'
-import { fetchPipeline, fetchOverview } from './api'
+import { fetchPipeline, fetchOverview, fetchRecoveryBoard } from './api'
 
 const VIEW_MAP = {
   '/flow': FlowView,
+  '/recovery': RecoveryView,
   '/report': ReportView,
   '/schedule': ScheduleView,
   '/device': DeviceView
@@ -93,6 +98,7 @@ const activeView = computed(() => VIEW_MAP[currentPath.value] || FlowView)
 
 const views = [
   { path: '/flow', label: '工位流水线' },
+  { path: '/recovery', label: '跨线恢复' },
   { path: '/report', label: '检测报告' },
   { path: '/schedule', label: '引车员排班' },
   { path: '/device', label: '设备标定' }
@@ -100,6 +106,8 @@ const views = [
 
 const stations = ref([])
 const overview = ref({})
+const recoveryCount = ref(0)
+let pollTimer = null
 
 // 沿流水线移动的「当前车辆」胶囊
 const capsule = reactive({ plate: '', seq: 0 })
@@ -119,7 +127,8 @@ provide('pipeline', {
   },
   clearStation () {
     activeStation.value = null
-  }
+  },
+  reloadAll: load
 })
 
 const capsuleLeft = computed(() => {
@@ -167,10 +176,22 @@ async function load () {
   } catch (e) {
     overview.value = {}
   }
+  try {
+    const board = await fetchRecoveryBoard()
+    recoveryCount.value = (board.affectedTasks || []).filter((t) => !t.resolved).length
+  } catch (e) {
+    recoveryCount.value = 0
+  }
 }
 
 onMounted(() => {
   router.push(window.location.pathname || '/flow')
   load()
+  // 跨线恢复涉及并发处置：底部工位占用、待处置数量每 8 秒自动刷新
+  pollTimer = setInterval(load, 8000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
 })
 </script>

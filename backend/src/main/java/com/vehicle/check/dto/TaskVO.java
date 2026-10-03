@@ -39,6 +39,8 @@ public class TaskVO {
     private Integer lightIntensity;
     private String chassisDefects;
     private Integer retestTimes;
+    /** 复检任务关联的原报告编号（跨线恢复后仍保留） */
+    private String originReportNo;
     private LocalDateTime createTime;
     private LocalDateTime finishTime;
     private List<RecordVO> records = new ArrayList<>();

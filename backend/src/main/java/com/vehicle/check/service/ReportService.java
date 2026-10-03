@@ -181,6 +181,11 @@ public class ReportService {
         task.setScheduleHour(request.getScheduleHour() == null ? origin.getScheduleHour() : request.getScheduleHour());
         task.setCheckDate(checkDate);
         task.setRetestTimes(origin.getRetestTimes() + 1);
+        // 复检链必须咬住原报告：转线只换检测线，不换任务/不换报告关联，
+        // 全部剩余工位完成前不允许签发新报告（issueReport 的在检拦截天然保证）
+        String originReportNo = report.getRetestOf() == null || report.getRetestOf().isBlank()
+                ? report.getReportNo() : report.getRetestOf();
+        task.setOriginReportNo(originReportNo);
         task.setCreateTime(LocalDateTime.now());
         first.setStatus("OCCUPIED");
         stationRepository.save(first);
@@ -302,6 +307,7 @@ public class ReportService {
         vo.setScheduleHour(task.getScheduleHour());
         vo.setCheckDate(task.getCheckDate());
         vo.setRetestTimes(task.getRetestTimes());
+        vo.setOriginReportNo(task.getOriginReportNo());
         return vo;
     }
 }

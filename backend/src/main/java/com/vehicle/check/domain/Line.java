@@ -35,6 +35,10 @@ public class Line {
     @Column(name = "daily_capacity")
     private Integer dailyCapacity;
 
+    /** 承接车辆类型，逗号分隔：SMALL_BUS/TRUCK/HAZMAT */
+    @Column(name = "accept_vehicle_types", nullable = false)
+    private String acceptVehicleTypes = "SMALL_BUS,TRUCK,HAZMAT";
+
     @Column(name = "remark")
     private String remark;
 }

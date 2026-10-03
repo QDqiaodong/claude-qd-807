@@ -50,6 +50,14 @@ export const fetchCalStat = () => unwrap(http.get('/devices/cal-stat'))
 
 export const fetchDrivers = () => unwrap(http.get('/drivers'))
 export const fetchSchedule = (date) => unwrap(http.get('/drivers/schedule', { params: { date } }))
+
+// ---------------- 在检车辆跨线恢复处置台 ----------------
+export const fetchRecoveryBoard = () => unwrap(http.get('/recovery/board'))
+export const fetchAffectedTask = (taskId) => unwrap(http.get(`/recovery/tasks/${taskId}`))
+export const confirmTransfer = (taskId, payload) =>
+  unwrap(http.post(`/recovery/tasks/${taskId}/transfer`, payload))
+export const keepPending = (taskId, payload) =>
+  unwrap(http.post(`/recovery/tasks/${taskId}/keep-pending`, payload))
 export const assignTask = (driverId, payload) =>
   unwrap(http.post(`/drivers/${driverId}/assign`, payload))
 export const reassignTask = (taskId, driverId, hour) =>
